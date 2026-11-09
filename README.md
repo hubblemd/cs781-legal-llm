@@ -25,10 +25,10 @@ No pretrained weights, external data or commercial APIs are used anywhere.
 | 4 | Court judgment prediction | macro-F1 (corrected dev) | Prefix LM, full fine-tuning | **0.732** |
 | 5 | Legal statute identification | macro-F1 | Llama, layer-wise (gradual unfreezing) | **0.3586** |
 | 6 | Abstractive summarisation | BERTScore-F1 | Prefix LM + LoRA, segment-wise generation | **0.8463** |
-| 7 | Prior case retrieval | micro-F1@7 (dev) | Llama IA³ dual encoder fused with BM25 (set A) | **0.3947** |
+| 7 | Prior case retrieval | micro-F1@7 | Llama full fine-tuning dual encoder fused with tuned BM25 | **0.4335** |
 
 Scores are Codabench (hidden test) unless marked dev. Phase 4 is reported on the corrected dev set, as instructed
-after the data-leak correction. Phase 7 set B is still running; see its README. Every phase README has the full
+after the data-leak correction. Every phase README has the full
 table for all submissions.
 
 ## Repository layout
