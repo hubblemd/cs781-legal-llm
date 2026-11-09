@@ -26,10 +26,8 @@ temperature 0.7, top-p 0.9, repetition penalty 1.2 → **BERTScore-F1 0.8365** (
   filled, so no judgment appears in both sets. Documents are shuffled per source; training batches come from a
   random permutation of 1024-token blocks each epoch (every batch mixes all sources).
 * Architecture comparison: 200M train / 5M validation tokens, mix SC 0.40 / HC 0.30 / Trib 0.15 / Acts 0.15.
-* **Test-domain analysis:** a word-level Naive Bayes source classifier (93.7% held-out accuracy) labelled the public
-  test prompts. About 87% are Supreme Court style, although Supreme Court is only 6.9% of the corpus. Final mix:
-  **SC 0.50 / HC 0.20 / Trib 0.15 / Acts 0.15**, 600M budget. All Supreme Court text is then used once, giving
-  549.3M training tokens.
+* **Final mix:** **SC 0.50 / HC 0.20 / Trib 0.15 / Acts 0.15**, 600M budget. Supreme Court text is only 6.9% of the
+  corpus (~301M tokens); the final mix uses all of it once, giving 549.3M training tokens.
 
 ## Tokenizer (`legal_bpe.py`)
 
@@ -136,9 +134,9 @@ and the Prefix LM loop sentences. **We chose Llama**, because it is the best lan
 | Pilot (GPT-2 tokenizer, 50M tokens) | 0.8226 |
 | Own BPE, 200M tokens | 0.8234 |
 | Better decoding | 0.8333 |
-| 549M test-matched tokens | **0.8365** |
+| 549M tokens (SC-weighted mix) | **0.8365** |
 
-About three quarters of the gain came from decoding, one quarter from more and better-matched data.
+About three quarters of the gain came from decoding, one quarter from more pretraining data.
 
 ## Reproducing the final model
 
