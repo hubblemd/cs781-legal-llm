@@ -1,91 +1,77 @@
-# Phase 2: Legal Named Entity Recognition (L-NER)
+# Phase 3: Rhetorical Role Prediction
 
-**Task.** For an Indian court judgment, predict every entity as a character span `[start, end, label]` with one of 12
-labels: APP, RESP, A.COUNSEL, R.COUNSEL, JUDGE, WIT, AUTH, COURT, STAT, PREC, DATE, CASENO. Metric: **strict
-macro-F1**, where a prediction counts only if start, end and label all match.
+**Task.** Label every sentence of a judgment with one of 13 rhetorical roles: Fact, Issue, ArgumentPetitioner,
+ArgumentRespondent, Statute, Dissent, PrecedentReliedUpon, PrecedentNotReliedUpon, PrecedentOverruled,
+RulingByLowerCourt, RatioOfTheDecision, RulingByPresentCourt, None. There are two domains, Corporate Law (CL) and IT.
+Metric: macro-F1.
 
-**Best submission:** Prefix LM, full fine-tuning, word-vote span decoding → **0.5067** strict macro-F1 (Codabench).
+**Best submission:** ensemble of three models → **0.4709** macro-F1 (Codabench). Best single model: Llama + LoRA, 0.4665.
 
 ## File
 
-`CS781_Phase2_LNER.ipynb`: one Kaggle run trains all 6 experiments in sequence and writes one `submission.zip` per
-experiment.
+`CS781_Phase3_RR.ipynb`: 8 training runs plus the ensemble, in one Kaggle session.
 
-## Data and validation
+## Setup
 
-Training documents come from fold1 + fold2; the test fold is hidden. No dev split is given, so **15% of the training
-documents** (split by document) are held out for model selection.
+One model is trained on CL + IT train. The epoch is selected on the official CL + IT dev sets (about 2,100
+sentences), and each domain is reported separately.
 
-## Pipeline
+## Model
 
-1. **Character offsets.** The tokenizer returns, for every token, the exact characters it covers. Punctuation runs
-   such as `).` are split into single characters so that entity boundaries fall on token boundaries.
-   *Alignment ceiling:* gold spans → BIO tags → spans recovers **99.1%** macro-F1, so tokenisation loses almost nothing.
-2. **Long documents.** 512-token windows with stride 384; logits of overlapping windows are averaged.
-3. **Two-sided context.** See the shared backbone wrapper in the root README (Prefix LM bidirectional prefix, T5
-   encoder, Llama without causal mask, RetNet echo).
-4. **Tag head.** The LM head is dropped and a linear layer (768 → 25 BIO tags) is put on every token.
-5. **Span decoding: `word_vote`.** One tag per word (sub-word probabilities summed), then one label per span (majority
-   of its words). This fixes names broken into pieces such as RESP/APP/RESP, which was the largest error type of the
-   first iteration (896 of 5,143 predicted spans were ≤ 3 characters).
-6. **Training.** AdamW, linear warm-up (6%) and decay, fp16, batch 8, tag-head lr 1e-3, up to 25 epochs with early
-   stopping on validation strict macro-F1 (patience 5).
+1. **Document context.** Consecutive sentences are packed into 512-token windows (separated by an end token). A new
+   window starts halfway through the previous one, and predictions of overlapping windows are averaged. A
+   sentence-only mode is kept for the ablation.
+2. **Sentence vector.** The backbone encodes the window (bidirectional / encoder / echo, as in Phase 2), and the
+   token states of each sentence are mean-pooled.
+3. **Head.** A BiGRU over the window's sentence vectors, plus an embedding of the sentence's relative position in the
+   document (10 buckets), then a linear layer.
+4. **Imbalance.** Class weights ∝ 1/√count and label smoothing 0.1.
+5. **Ensemble.** Average of the label probabilities of the three best runs on dev.
+
+## Techniques (all from scratch; rank 16, α 32)
+
+| Technique | Model | Learning rate | Notes |
+|---|---|---|---|
+| Full fine-tuning | Prefix LM | 3e-5 | baseline and KD teacher |
+| LoRMA (compulsory) | Prefix LM | 3e-4 | |
+| LoRA | Llama | 5e-4 | |
+| rsLoRA | T5 encoder | 2e-4 | scale α/√r |
+| IA³ | RetNet | 3e-3 | |
+| Prompt tuning | Llama | 3e-2 | 32 soft vectors |
+| Knowledge distillation (compulsory) | RetNet, 6 of 12 layers | – | loss 0.5·CE + 0.5·T²·KL, T = 2 |
+| Context ablation | Prefix LM, LoRMA | 3e-4 | sentence-only |
+
+Up to 15 epochs, patience 5, batch 8, head lr 1e-3.
 
 ## Notebook structure
 
-| Cell | Content |
-|---|---|
-| config | `EXPERIMENTS`, all hyperparameters, `SMOKE_TEST` |
-| setup | device, Hugging Face token, data download, Phase-1 model discovery |
-| Phase-1 code | `LegalBPETokenizer`, the four model classes (unchanged from Phase 1) |
-| task code | JSON parsing, annotation checks, document split, tokenisation with offsets, BIO conversion, strict scorer, windows |
-| methods | LoRA / LoRMA / adapter / BitFit wrappers, `NERModel` (backbone wrapper + tag head), `apply_method`, `keep_layers` (KD student) |
-| training | features, collate, window-averaged prediction, `decode_word_vote`, evaluation, class weights, training loop with early stopping |
-| 1. Data | loading, checks, alignment ceiling |
-| 2. Runner | build → train → validate → test predictions → `submission.zip`, `metrics.json` |
-| 3. Run | runs every experiment within the 11-hour budget and prints the comparison table |
-
-## Techniques (rank 16, α 32, attention + FFN for the low-rank methods)
-
-* **Full fine-tuning**: all weights.
-* **LoRMA** (compulsory): `W' = (I + (α/r)·B A)·W`, B = 0 at the start.
-* **Houlsby adapters**: bottleneck 64 after each sub-layer output.
-* **Partial fine-tuning**: all 6 layers of the T5 encoder.
-* **Knowledge distillation** (compulsory): teacher = Prefix LM full fine-tuning; student = RetNet with 6 of 12 layers.
-  Loss = 0.5·CE + 0.5·T²·KL(student‖teacher) with T = 2.
+Config (`EXPERIMENTS`) → setup → Phase-1 tokenizer and models (unchanged) → task code (sentence packing, windows,
+BiGRU head, position embedding, macro-F1 per domain) → PEFT methods → training loop → data → experiment runner → run
+all plus the ensemble.
 
 ## Results (final submissions)
 
-| Model | Technique | Codabench | Val | Trainable |
-|---|---|---|---|---|
-| Prefix LM | Full FT (lr 1e-4) | **0.5067** | 0.426 | 109.6M |
-| Llama | Full FT (lr 1e-4) | 0.4900 | 0.437 | 109.5M |
-| Prefix LM | LoRMA (lr 1e-3) | 0.4795 | 0.437 | 3.1M |
-| Llama | Houlsby adapters (lr 1e-3) | 0.4633 | 0.420 | 2.4M |
-| T5 encoder | Partial (6 layers, lr 2e-4) | 0.3669 | 0.297 | 42.5M |
-| RetNet (6 layers) | KD from Prefix LM | 0.3668 | 0.347 | 70.6M |
+| Model | Technique | Codabench | Dev | Dev CL | Dev IT | Trainable |
+|---|---|---|---|---|---|---|
+| Ensemble (3 models) | probability average | **0.4709** | **0.495** | 0.426 | 0.498 | – |
+| Llama | LoRA | 0.4665 | 0.486 | 0.430 | 0.505 | 5.0M |
+| Prefix LM | Full FT (teacher) | 0.4599 | 0.461 | 0.370 | 0.472 | 112.2M |
+| Prefix LM | LoRMA | 0.4552 | 0.465 | 0.401 | 0.483 | 5.7M |
+| RetNet (6 layers) | KD from Prefix LM | 0.4248 | 0.450 | 0.344 | 0.476 | 73.3M |
+| RetNet | IA³ | 0.4245 | 0.445 | 0.363 | 0.485 | 2.7M |
+| Llama | Prompt tuning | 0.3966 | 0.388 | 0.312 | 0.385 | 2.7M |
+| T5 encoder | rsLoRA | 0.3914 | 0.405 | 0.388 | 0.372 | 3.9M |
+| Prefix LM | LoRMA, sentence only (ablation) | 0.3516 | 0.313 | 0.244 | 0.341 | 3.1M |
 
-**Span-decoding ablation** (validation strict macro-F1, same logits):
-
-| Run | Lenient BIO | Strict BIO | Word vote |
-|---|---|---|---|
-| Prefix LM full | 0.358 | 0.409 | **0.426** |
-| Prefix LM LoRMA | 0.343 | 0.399 | **0.437** |
-| Llama full | 0.353 | 0.427 | **0.437** |
-| T5 partial | 0.212 | 0.259 | **0.297** |
+The ensemble is Llama-LoRA + Prefix-LM-LoRMA + Prefix-LM-full. Trainable counts include the BiGRU head (2.7M).
 
 ## Observations
 
-* The Prefix LM (pretrained with a bidirectional prefix) gives the best tagger.
-* Word-vote decoding adds 0.07–0.08 validation F1 over greedy BIO at no training cost.
-* LoRMA trains 3% of the parameters and keeps 95% of full fine-tuning's score (0.4795 vs 0.5067).
-* The 6-layer distilled RetNet keeps 72% of the teacher's score.
-* DATE and COURT reach about 0.9 F1. APP/RESP and A.COUNSEL/R.COUNSEL are confused because only the surrounding words
-  (for example "for the appellant") decide the role.
-* Boundary errors remain the largest error group.
-
-## Limitations
-
-* Llama was pretrained on 600M tokens and the other backbones on 200M, so part of the gap between models is
-  pretraining, not the fine-tuning method.
-* Flat BIO cannot represent nested entities; single seed; one validation split.
+* **Document context matters most:** the same LoRMA model gets 0.4552 with context and 0.3516 on isolated sentences.
+* **PEFT matches full fine-tuning** while training about 2% of the backbone; with about 100 training documents, fewer
+  updated weights also overfit less.
+* LoRMA oscillated at lr 1e-3 and became stable at 3e-4.
+* The distilled RetNet keeps 92% of its teacher's score.
+* Ensembling helps because the models agree on only about 65% of dev sentences.
+* IT is easier than CL for almost every model. The most frequent errors are Fact / Argument / Precedent predicted as
+  Ratio, and ArgumentPetitioner ↔ ArgumentRespondent.
